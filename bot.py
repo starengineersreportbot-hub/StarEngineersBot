@@ -120,7 +120,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔄 ה-AI מנתח את הדיווח מהשטח, אנא המתן...")
         
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-2-flash')
             response = model.generate_content(f"{PROMPT_INSTRUCTIONS}\n\nהטקסט מהשטח:\n{user_input}")
             
             clean_json = response.text.replace("```json", "").replace("```", "").strip()
