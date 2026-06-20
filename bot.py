@@ -1,7 +1,9 @@
 import logging
 import json
 import os
+import threading
 from datetime import datetime
+from http.server import SimpleHTTPRequestHandler, HTTPServer
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import google.generativeai as genai
@@ -13,7 +15,7 @@ MY_CHAT_ID = 8251059616
 
 # --- משיכת מפתח ה-AI מהגדרות השרת ב-Render ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-TEMPLATE_PATH = "template.docx"  # ודא שקובץ הוורד שלך ב-GitHub נקרא בדיוק כך!
+TEMPLATE_PATH = "template.docx"
 
 # חיבור ל-Gemini
 genai.configure(api_key=GEMINI_API_KEY)
@@ -41,7 +43,6 @@ PROMPT_INSTRUCTIONS = """
 """
 
 def create_word_report(data, template_path, output_path):
-    """פונקציה שמחליפה את התגיות במסמך הוורד בנתונים שהתקבלו מה-AI"""
     doc = Document(template_path)
     current_date = datetime.now().strftime("%d/%m/%Y")
     
@@ -62,13 +63,11 @@ def create_word_report(data, template_path, output_path):
         "{work_status}": data.get("work_status", "")
     }
     
-    # החלפה בפסקאות רגילות
     for paragraph in doc.paragraphs:
         for placeholder, value in replacements.items():
             if placeholder in paragraph.text:
                 paragraph.text = paragraph.text.replace(placeholder, value)
                 
-    # החלפה בתוך טבלאות
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
@@ -94,17 +93,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     output_filename = f"פיקוח_עליון_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
 
     try:
-        # פנייה ל-Gemini
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(f"{PROMPT_INSTRUCTIONS}\n\nהטקסט מהשטח:\n{user_text}")
         
         clean_json = response.text.replace("```json", "").replace("```", "").strip()
         data = json.loads(clean_json)
         
-        # יצירת הקובץ מהתבנית
         create_word_report(data, TEMPLATE_PATH, output_filename)
         
-        # שליחת הקובץ המוכן חזרה לטלגרם
         with open(output_filename, 'rb') as doc_file:
             await update.message.reply_document(document=doc_file, filename=output_filename, caption="📝 הנה דוח הפיקוח העליון המוכן שלך!")
             
@@ -113,7 +109,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ התרחשה שגיאה בהפקת המסמך: {e}")
 
+def run_dummy_server():
+    """שרת פיקטיבי קטן כדי לגרום ל-Render לחשוב שיש כאן אתר אינטרנט"""
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), SimpleHTTPRequestHandler)
+    print(f"Dummy server running on port {port}...")
+    server.serve_forever()
+
 def main():
+    # הפעלת השרת הפיקטיבי ברקע
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+
+    # הפעלת הבוט של טלגרם
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
