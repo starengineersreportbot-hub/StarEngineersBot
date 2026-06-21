@@ -33,7 +33,7 @@ FIELD_LABELS = {
 
 def get_ai_response(prompt):
     """פונקציה עם מנגנון המתנה לטיפול בשגיאות מכסה (429)"""
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    model = genai.GenerativeModel('gemini-2.0-flash')
     retries = 3
     for i in range(retries):
         try:
