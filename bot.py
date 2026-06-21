@@ -1,7 +1,7 @@
 import os
 import telebot
 from openai import OpenAI
-import docx
+from docxtpl import DocxTemplate
 from datetime import datetime
 import json
 
@@ -16,23 +16,23 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 user_states = {}
 
 def get_missing_fields_prompt(text):
-    """שולח את הטקסט ל-OpenAI כדי לבדוק אם חסרים פרטים"""
+    """שולח את הטקסט ל-OpenAI כדי לבדוק אם חסרים פרטים לפי התבנית המדויקת"""
     prompt = f"""
     אתה עוזר מקצועי של חברת "סטאר מהנדסים" שתפקידו לעבד נתונים מהשטח ולהכין דוח פיקוח עליון מובנה.
     נתח את הטקסט הבא ששלח המהנדס מהשטח וזהה איזה מהפרטים הבאים חסרים:
     1. project_num (מספר פרויקט)
     2. letter_num (מספר מכתב)
-    3. client_name (לכבוד - שם הלקוח)
-    4. contact_person (לידי - איש קשר)
-    5. email (במייל - כתובת אימייל)
-    6. structure_name (שם המבנה / הפרויקט)
-    7. supervisor_name (שם המפקח באתר)
-    8. contractor_name (נציגי הביצוע / קבלן)
-    9. author_initials (ראשי תיבות של כותב הדוח)
-    10. description (תיאור מצב העבודה הנוכחי)
+    3. client_name (שם הלקוח)
+    4. contact_person (איש קשר)
+    5. client_email (כתובת אימייל)
+    6. structure_name (שם המבנה)
+    7. inspection_subject (נושא הפיקוח, למשל: "יציקת רצפה", "זיון קירות")
+    8. inspector_name (שם המפקח באתר)
+    9. execution_team (נציגי הביצוע / קבלן)
+    10. work_status (תיאור מצב העבודה הנוכחי מהשטח)
 
     שים לב לחוקים הבאים:
-    - נוכח מטעם סטאר מהנדסים הוא תמיד "הח"מ" כברירת מחדל, אלא אם צוין אחרת במפורש, לכן אל תסמן אותו כחסר.
+    - star_present (נציג סטאר מהנדסים) הוא תמיד "הח"מ" כברירת מחדל, לכן אל תסמן אותו כחסר.
     - אל תמציא פרטים! אם פרט לא מופיע, הוא חסר.
 
     החזר אך ורק תשובת JSON תקינה בפורמט הבא, ללא שום טקסט נוסף לפני או אחרי:
@@ -42,12 +42,12 @@ def get_missing_fields_prompt(text):
             "letter_num": "הערך שנמצא או null",
             "client_name": "הערך שנמצא או null",
             "contact_person": "הערך שנמצא או null",
-            "email": "הערך שנמצא או null",
+            "client_email": "הערך שנמצא או null",
             "structure_name": "הערך שנמצא או null",
-            "supervisor_name": "הערך שנמצא או null",
-            "contractor_name": "הערך שנמצא או null",
-            "author_initials": "הערך שנמצא או null",
-            "description": "הערך שנמצא או null"
+            "inspection_subject": "הערך שנמצא או null",
+            "inspector_name": "הערך שנמצא או null",
+            "execution_team": "הערך שנמצא או null",
+            "work_status": "הערך שנמצא או null"
         }}
     }}
 
@@ -67,13 +67,15 @@ def get_missing_fields_prompt(text):
         print(f"Error calling OpenAI: {e}")
         return None
 
-def improve_description(data):
+def improve_description(text_to_improve):
     """משתמש ב-OpenAI כדי לנסח את תיאור המצב בשפה הנדסית גבוהה"""
+    if not text_to_improve:
+        return ""
     prompt = f"""
     אתה מהנדס מבנים בכיר ב"סטאר מהנדסים". נסח מחדש את תיאור מצב העבודה הבא שנכתב כהערות קצרות מהשטח, 
     והפוך אותו לפסקה מנוסחת היטב בשפה הנדסית רשמית, מקצועית ומדויקת המתאימה לדוח פיקוח עליון.
     
-    הנתונים הגולמיים מהשטח: "{data.get('description')}"
+    הנתונים הגולמיים מהשטח: "{text_to_improve}"
     """
     try:
         response = client.chat.completions.create(
@@ -83,51 +85,43 @@ def improve_description(data):
         )
         return response.choices[0].message.content.strip()
     except:
-        return data.get('description')
+        return text_to_improve
 
 def create_report(data, template_path="template.docx", output_path="output.docx"):
-    """משבץ את הנתונים לתוך תבנית הוורד הקבועה"""
-    doc = docx.Document(template_path)
+    """משבץ את הנתונים לתוך תבנית הוורד באמצעות docxtpl"""
+    doc = DocxTemplate(template_path)
     
-    # שיפור הניסוח של התיאור
-    professional_description = improve_description(data)
+    # שיפור הניסוח של התיאור הקיים ב-work_status
+    professional_status = improve_description(data.get('work_status', ''))
     
-    replacements = {
-        "[מספר פרויקט]": str(data.get("project_num", "") or ""),
-        "[מספר מכתב]": str(data.get("letter_num", "") or ""),
-        "[התאריך של היום]": datetime.now().strftime("%d/%m/%Y"),
-        "[שם הלקוח]": str(data.get("client_name", "") or ""),
-        "[איש קשר]": str(data.get("contact_person", "") or ""),
-        "[כתובת אימייל]": str(data.get("email", "") or ""),
-        "[שם המבנה / הפרויקט]": str(data.get("structure_name", "") or ""),
-        "[שם המפקח באתר]": str(data.get("supervisor_name", "") or ""),
-        "[נציגי הביצוע]": str(data.get("contractor_name", "") or ""),
-        "[ראשי תיבות של כותב הדוח]": str(data.get("author_initials", "") or ""),
-        "[תיאור מצב העבודה הנוכחי]": professional_description,
-        "[נוכח מטעם סטאר]": "הח\"מ"
+    # בניית ההקשר (Context) שיוזרק ישירות לסוגריים המסולסלים בוורד
+    context = {
+        "report_date": datetime.now().strftime("%d/%m/%Y"),
+        "visit_date": datetime.now().strftime("%d/%m/%Y"), # כברירת מחדל תאריך הסיור הוא היום
+        "project_num": str(data.get("project_num") or ""),
+        "letter_num": str(data.get("letter_num") or ""),
+        "client_name": str(data.get("client_name") or ""),
+        "contact_person": str(data.get("contact_person") or ""),
+        "client_email": str(data.get("client_email") or ""),
+        "structure_name": str(data.get("structure_name") or ""),
+        "inspection_subject": str(data.get("inspection_subject") or ""),
+        "inspector_name": str(data.get("inspector_name") or ""),
+        "execution_team": str(data.get("execution_team") or ""),
+        "star_present": "הח\"מ",
+        "work_status": professional_status,
+        "specific_remarks_list": [], # כרגע ריק כדי לא לשבור את הלולאות בתבניתของคุณ
+        "general_remarks_list": [],
+        "cc_final_list": [],
+        "signature_image": ""
     }
     
-    # החלפה בפסקאות רגילות
-    for paragraph in doc.paragraphs:
-        for placeholder, value in replacements.items():
-            if placeholder in paragraph.text:
-                paragraph.text = paragraph.text.replace(placeholder, value)
-                
-    # החלפה בתוך טבלאות
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for paragraph in cell.paragraphs:
-                    for placeholder, value in replacements.items():
-                        if placeholder in paragraph.text:
-                            paragraph.text = paragraph.text.replace(placeholder, value)
-                            
+    doc.render(context)
     doc.save(output_path)
     return output_path
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "שלום אביב! שלח לי את הנתונים מהסיור בשטח, ואני אכין לך את דוח הפיקוח העליון בוורד באמצעות OpenAI.")
+    bot.reply_to(message, "שלום אביב! שלח לי את הנתונים מהסיור בשטח, ואני אפיק דוח פיקוח עליון מותאם לתבנית של סטאר מהנדסים.")
 
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
@@ -147,16 +141,16 @@ def handle_text(message):
             prompts_map = {
                 "project_num": "מספר פרויקט", "letter_num": "מספר מכתב",
                 "client_name": "שם הלקוח (לכבוד)", "contact_person": "איש קשר (לידי)",
-                "email": "כתובת אימייל (במייל)", "structure_name": "שם המבנה / הפרויקט",
-                "supervisor_name": "שם המפקח באתר", "contractor_name": "נציגי הביצוע / קבלן",
-                "author_initials": "ראשי תיבות של כותב הדוח"
+                "client_email": "כתובת אימייל (במייל)", "structure_name": "שם המבנה",
+                "inspection_subject": "נושא הפיקוח (למשל: יציקת רצפה)",
+                "inspector_name": "שם המפקח באתר", "execution_team": "נציגי הביצוע / קבלן"
             }
             field_display = prompts_map.get(next_field, next_field)
             state["waiting_for"] = next_field
             bot.send_message(chat_id, f"מעולה. עכשיו, מהו **{field_display}**?")
             return
         else:
-            bot.send_message(chat_id, "כל הפרטים נאספו בהצלחה! מייצר עבורך את קובץ הוורד...")
+            bot.send_message(chat_id, "כל הפרטים נאספו בהצלחה! מייצר עבורך את קובץ הוורד המעודכן...")
             try:
                 doc_file = create_report(state["data"])
                 with open(doc_file, 'rb') as f:
@@ -166,12 +160,12 @@ def handle_text(message):
                 bot.send_message(chat_id, f"אירעה שגיאה ביצירת הקובץ: {e}")
             return
 
-    # תהליך התחלתי
+    # תהליך התחלתי - ניתוח ראשוני
     bot.send_message(chat_id, "מנתח את הנתונים ששלחת ב-OpenAI, רק רגע...")
     analysis = get_missing_fields_prompt(text)
     
     if not analysis:
-        bot.send_message(chat_id, "היה קושי קטן בתקשורת עם OpenAI, אנא נסה לשלוח שוב.")
+        bot.send_message(chat_id, "היה קושי קטן בתקשורת, אנא נסה לשלוח שוב.")
         return
         
     extracted_data = analysis.get("extracted_data", {})
@@ -187,14 +181,15 @@ def handle_text(message):
         prompts_map = {
             "project_num": "מספר פרויקט", "letter_num": "מספר מכתב",
             "client_name": "שם הלקוח (לכבוד)", "contact_person": "איש קשר (לידי)",
-            "email": "כתובת אימייל (במייל)", "structure_name": "שם המבנה / הפרויקט",
-            "supervisor_name": "שם המפקח באתר", "contractor_name": "נציגי הביצוע / קבלן",
-            "author_initials": "ראשי תיבות של כותב הדוח", "description": "תיאור מצב העבודה הנוכחי"
+            "client_email": "כתובת אימייל (במייל)", "structure_name": "שם המבנה",
+            "inspection_subject": "נושא הפיקוח (למשל: יציקת רצפה)",
+            "inspector_name": "שם המפקח באתר", "execution_team": "נציגי הביצוע / קבלן",
+            "work_status": "תיאור מצב העבודה הנוכחי"
         }
         
         first_missing = actual_missing[0]
         field_display = prompts_map.get(first_missing, first_missing)
-        bot.send_message(chat_id, f"הבנתי את רוב הפרטים, אבל חסרים לי כמה נתונים.\nמהו **{field_display}**?")
+        bot.send_message(chat_id, f"הבנתי חלק מהפרטים, מהו **{field_display}**?")
     else:
         bot.send_message(chat_id, "כל הפרטים קיימים! מפיק את קובץ הוורד...")
         try:
@@ -205,5 +200,5 @@ def handle_text(message):
             bot.send_message(chat_id, f"אירעה שגיאה ביצירת הקובץ: {e}")
 
 if __name__ == '__main__':
-    print("Bot is running with OpenAI...")
+    print("Bot is running perfectly with docxtpl...")
     bot.infinity_polling()
