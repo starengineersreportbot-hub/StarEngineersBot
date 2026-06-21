@@ -37,7 +37,6 @@ def get_missing_fields_prompt(text):
 
     החזר אך ורק תשובת JSON תקינה בפורמט הבא, ללא שום טקסט נוסף לפני או אחרי:
     {{
-        "missing_fields": ["שם השדה החסר בעברית", "עוד שדה חסר בעברית"],
         "extracted_data": {{
             "project_num": "הערך שנמצא או null",
             "letter_num": "הערך שנמצא או null",
@@ -114,7 +113,7 @@ def create_report(data, template_path="template.docx", output_path="output.docx"
             if placeholder in paragraph.text:
                 paragraph.text = paragraph.text.replace(placeholder, value)
                 
-    # החלפה בתוך טבלאות (אם יש בתבנית)
+    # החלפה בתוך טבלאות
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
@@ -126,28 +125,25 @@ def create_report(data, template_path="template.docx", output_path="output.docx"
     doc.save(output_path)
     return output_path
 
-@bot.message_with_type_handler(commands=['start', 'help'])
+@bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "שלום אביב! שלח לי את הנתונים מהסיור בשטח (בטקסט או בהקלטה קולית), ואני אכין לך את דוח הפיקוח העליון בוורד.")
+    bot.reply_to(message, "שלום אביב! שלח לי את הנתונים מהסיור בשטח, ואני אכין לך את דוח הפיקוח העליון בוורד באמצעות OpenAI.")
 
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
     chat_id = message.chat.id
     text = message.text
 
-    # אם המשתמש נמצא בתהליך השלמת פרטים חסרים
+    # תהליך השלמת פרטים חסרים
     if chat_id in user_states and user_states[chat_id].get("waiting_for"):
         state = user_states[chat_id]
         missing_field_key = state["waiting_for"]
         
-        # שמירת המידע שהמשתמש הזין
         state["data"][missing_field_key] = text
-        state["missing_list"].pop(0) # הסרת השדה שהושלם מהרשימה
+        state["missing_list"].pop(0)
         
-        # בדיקה אם יש עוד שדות חסרים
         if state["missing_list"]:
             next_field = state["missing_list"][0]
-            # מיפוי קל כדי לשאול בצורה יפה
             prompts_map = {
                 "project_num": "מספר פרויקט", "letter_num": "מספר מכתב",
                 "client_name": "שם הלקוח (לכבוד)", "contact_person": "איש קשר (לידי)",
@@ -160,39 +156,34 @@ def handle_text(message):
             bot.send_message(chat_id, f"מעולה. עכשיו, מהו **{field_display}**?")
             return
         else:
-            # הכל הושלם! מייצרים דוח
             bot.send_message(chat_id, "כל הפרטים נאספו בהצלחה! מייצר עבורך את קובץ הוורד...")
             try:
                 doc_file = create_report(state["data"])
                 with open(doc_file, 'rb') as f:
                     bot.send_document(chat_id, f, caption="הנה דוח הפיקוח העליון המוכן שלך! 📝")
-                user_states.pop(chat_id, None) # איפוס מצב
+                user_states.pop(chat_id, None)
             except Exception as e:
                 bot.send_message(chat_id, f"אירעה שגיאה ביצירת הקובץ: {e}")
             return
 
-    # תהליך התחלתי - ניתוח הטקסט הראשוני
-    bot.send_message(chat_id, "מנתח את הנתונים ששלחת, רק רגע...")
+    # תהליך התחלתי
+    bot.send_message(chat_id, "מנתח את הנתונים ששלחת ב-OpenAI, רק רגע...")
     analysis = get_missing_fields_prompt(text)
     
     if not analysis:
-        bot.send_message(chat_id, "היה קושי קטן בתקשורת עם השרת, אנא נסה לשלוח שוב.")
+        bot.send_message(chat_id, "היה קושי קטן בתקשורת עם OpenAI, אנא נסה לשלוח שוב.")
         return
         
-    missing = analysis.get("missing_fields_keys", [])
-    # נגזור את רשימת המפתחות החסרים האמיתיים מתוך ה-extracted_data ששווים ל-null
     extracted_data = analysis.get("extracted_data", {})
-    actual_missing = [k for k, v in extracted_data.items() if v is None or v == "null"]
+    actual_missing = [k for k, v in extracted_data.items() if v is None or v == "null" or v == "None"]
     
     if actual_missing:
-        # שמירת המצב במילון
         user_states[chat_id] = {
             "data": extracted_data,
             "missing_list": actual_missing,
             "waiting_for": actual_missing[0]
         }
         
-        # מפות שמות ידידותיים לשאלה
         prompts_map = {
             "project_num": "מספר פרויקט", "letter_num": "מספר מכתב",
             "client_name": "שם הלקוח (לכבוד)", "contact_person": "איש קשר (לידי)",
@@ -205,8 +196,7 @@ def handle_text(message):
         field_display = prompts_map.get(first_missing, first_missing)
         bot.send_message(chat_id, f"הבנתי את רוב הפרטים, אבל חסרים לי כמה נתונים.\nמהו **{field_display}**?")
     else:
-        # הכל קיים כבר בטקסט המקורי!
-        bot.send_message(chat_id, "איזה יופי, כל הפרטים קיימים! מפיק את קובץ הוורד...")
+        bot.send_message(chat_id, "כל הפרטים קיימים! מפיק את קובץ הוורד...")
         try:
             doc_file = create_report(extracted_data)
             with open(doc_file, 'rb') as f:
@@ -215,5 +205,5 @@ def handle_text(message):
             bot.send_message(chat_id, f"אירעה שגיאה ביצירת הקובץ: {e}")
 
 if __name__ == '__main__':
-    print("Bot is running...")
+    print("Bot is running with OpenAI...")
     bot.infinity_polling()
