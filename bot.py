@@ -15,7 +15,7 @@ from docxtpl import DocxTemplate
 # --- הגדרות ---
 TELEGRAM_TOKEN = "8810122605:AAFkA97_VY3KV172CFf-7BleyDhMQgj4yYM"
 MY_CHAT_ID = 8251059616 
-# המפתח נמשך מהגדרות השרת (Environment Variable)
+# המפתח נמשך בצורה בטוחה מהגדרות השרת ב-Render (Environment Variable)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 TEMPLATE_PATH = "template.docx"
 
@@ -115,10 +115,17 @@ async def send_finished_report(update, context):
     context.user_data.clear()
     context.user_data['state'] = 'IDLE'
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != MY_CHAT_ID: return
+    context.user_data['state'] = 'IDLE'
+    await update.message.reply_text("🏗️ בוט פיקוח עליון - סטאר מהנדסים\nמוכן! שלח לי הודעה מהשטח ואני אבנה את הדוח.")
+
 def main():
+    # הרמת שרת דאמי ברקע כדי ש-Render לא יקרוס
     threading.Thread(target=lambda: HTTPServer(('0.0.0.0', int(os.environ.get("PORT", 10000))), SimpleHTTPRequestHandler).serve_forever(), daemon=True).start()
+    
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", lambda u, c: (c.user_data.update({'state': 'IDLE'}), u.message.reply_text("מוכן! שלח לי הודעה מהשטח."))))
+    app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.run_polling()
 
